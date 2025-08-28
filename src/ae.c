@@ -217,8 +217,9 @@ long long aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds,
     te->timeProc = proc;
     te->finalizerProc = finalizerProc;
     te->clientData = clientData;
+    // 插入到时间事件链表头，这是个双向列表
     te->prev = NULL;
-    te->next = eventLoop->timeEventHead;
+    te->next = eventLoop->timeEventHead; 
     te->refcount = 0;
     if (te->next)
         te->next->prev = te;
@@ -272,15 +273,20 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
     te = eventLoop->timeEventHead;
     maxId = eventLoop->timeEventNextId-1;
     monotime now = getMonotonicUs();
-    while(te) {
+    /**
+     * 遍历时间事件链表，处理每个时间事件
+     */
+    while(te) { 
         long long id;
 
-        /* Remove events scheduled for deletion. */
+        /* 移除要删除的事件 */
         if (te->id == AE_DELETED_EVENT_ID) {
             aeTimeEvent *next = te->next;
-            /* If a reference exists for this timer event,
-             * don't free it. This is currently incremented
-             * for recursive timerProc calls */
+            /** 
+             * 如果该定时器事件存在引用（正在被使用），
+             * 则不要释放它。
+             * 目前 refcount 会在定时器回调（timerProc）递归调用时增加。
+             */
             if (te->refcount) {
                 te = next;
                 continue;
@@ -300,22 +306,23 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
             continue;
         }
 
-        /* Make sure we don't process time events created by time events in
-         * this iteration. Note that this check is currently useless: we always
-         * add new timers on the head, however if we change the implementation
-         * detail, this check may be useful again: we keep it here for future
-         * defense. */
+        /**
+         * 确保在本轮循环中不会处理由时间事件自身创建的新时间事件。
+         * 注意：目前这个检查没有实际作用，因为我们总是将新定时器插入到链表头，
+         * 但是如果将来实现细节发生变化，这个检查可能会再次有用。
+         * 我们保留它以作防御性编程。
+         */
         if (te->id > maxId) {
             te = te->next;
             continue;
         }
 
-        if (te->when <= now) {
+        if (te->when <= now) { // 时间到了
             int retval;
 
             id = te->id;
             te->refcount++;
-            retval = te->timeProc(eventLoop, id, te->clientData);
+            retval = te->timeProc(eventLoop, id, te->clientData); // 调用定时器回调
             te->refcount--;
             processed++;
             now = getMonotonicUs();
@@ -390,8 +397,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
         if (eventLoop->beforesleep != NULL && flags & AE_CALL_BEFORE_SLEEP)
             eventLoop->beforesleep(eventLoop);
 
-        /* Call the multiplexing API, will return only on timeout or when
-         * some event fires. */
+        /* 调用多路复用（multiplexing）API，这个调用只会在超时或者有事件触发时才返回。 */
         numevents = aeApiPoll(eventLoop, tvp);
 
         /* After sleep callback. */
@@ -402,7 +408,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
             aeFileEvent *fe = &eventLoop->events[eventLoop->fired[j].fd];
             int mask = eventLoop->fired[j].mask;
             int fd = eventLoop->fired[j].fd;
-            int fired = 0; /* Number of events fired for current fd. */
+            int fired = 0; /* 当前文件描述符已经触发的事件数量。 */
 
             /* Normally we execute the readable event first, and the writable
              * event later. This is useful as sometimes we may be able
@@ -454,7 +460,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
     }
     /* Check time events */
     if (flags & AE_TIME_EVENTS)
-        processed += processTimeEvents(eventLoop);
+        processed += processTimeEvents(eventLoop); // 处理时间事件
 
     return processed; /* return the number of processed file/time events */
 }

@@ -2023,23 +2023,21 @@ void cronUpdateMemoryStats() {
     }
 }
 
-/* This is our timer interrupt, called server.hz times per second.
- * Here is where we do a number of things that need to be done asynchronously.
- * For instance:
+/* 这是我们的定时器中断，每秒被调用 server.hz 次。
+ * 在这里，我们执行许多需要异步处理的任务。例如：
  *
- * - Active expired keys collection (it is also performed in a lazy way on
- *   lookup).
- * - Software watchdog.
- * - Update some statistic.
- * - Incremental rehashing of the DBs hash tables.
- * - Triggering BGSAVE / AOF rewrite, and handling of terminated children.
- * - Clients timeout of different kinds.
- * - Replication reconnection.
- * - Many more...
+ * - 主动收集已过期的键（在查找时也会以惰性方式处理）。
+ * - 软件看门狗（监控服务器健康）。
+ * - 更新一些统计信息。
+ * - 数据库哈希表的增量 rehash。
+ * - 触发后台 RDB 保存（BGSAVE）或 AOF 重写，并处理已经终止的子进程。
+ * - 各种类型的客户端超时处理。
+ * - 复制连接的重新建立。
+ * - 以及更多其他任务……
  *
- * Everything directly called here will be called server.hz times per second,
- * so in order to throttle execution of things we want to do less frequently
- * a macro is used: run_with_period(milliseconds) { .... }
+ * 这里直接调用的所有操作，每秒会执行 server.hz 次。
+ * 为了限制某些操作的执行频率（不希望每次都执行），使用了宏：
+ * run_with_period(milliseconds) { .... }
  */
 
 int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
@@ -2103,6 +2101,10 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     if (server.shutdown_asap) {
         if (prepareForShutdown(SHUTDOWN_NOFLAGS) == C_OK) exit(0);
         serverLog(LL_WARNING,"SIGTERM received but errors trying to shut down the server, check the logs for more information");
+        /**
+         * 执行到这里，说明优雅退出失败，可能是文件权限、磁盘满等问题。
+         * 持续应当继续正常运行，直到用户处理完退出失败的问题，在次尝试优雅退出。
+         */
         server.shutdown_asap = 0;
     }
 
@@ -3313,9 +3315,10 @@ void initServer(void) {
     server.aof_last_write_errno = 0;
     server.repl_good_slaves_count = 0;
 
-    /* Create the timer callback, this is our way to process many background
-     * operations incrementally, like clients timeout, eviction of unaccessed
-     * expired keys and so forth. */
+    /** 
+     * 创建定时器回调，这是我们处理许多后台操作的方式，按增量执行：
+     * 例如客户端超时处理、回收未访问的过期键等等。
+     */
     if (aeCreateTimeEvent(server.el, 1, serverCron, NULL, NULL) == AE_ERR) {
         serverPanic("Can't create event loop timers.");
         exit(1);
@@ -5816,21 +5819,20 @@ static void sigShutdownHandler(int sig) {
         msg = "Received shutdown signal, scheduling shutdown...";
     };
 
-    /* SIGINT is often delivered via Ctrl+C in an interactive session.
-     * If we receive the signal the second time, we interpret this as
-     * the user really wanting to quit ASAP without waiting to persist
-     * on disk. */
+    /* SIGINT 通常是在交互式会话中通过 Ctrl+C 发送的。
+     * 如果我们第二次收到该信号，我们会认为用户真的想立即退出，
+     * 而不等待将数据持久化到磁盘。 */
     if (server.shutdown_asap && sig == SIGINT) {
         serverLogFromHandler(LL_WARNING, "You insist... exiting now.");
         rdbRemoveTempFile(getpid(), 1);
-        exit(1); /* Exit with an error since this was not a clean shutdown. */
-    } else if (server.loading) {
+        exit(1); /* 由于这不是一次正常的关闭，因此以错误状态退出。 */
+    } else if (server.loading) { // 加载文件时，立即退出
         serverLogFromHandler(LL_WARNING, "Received shutdown signal during loading, exiting now.");
         exit(0);
     }
 
     serverLogFromHandler(LL_WARNING, msg);
-    server.shutdown_asap = 1;
+    server.shutdown_asap = 1; // 在 serverCron() 触发优雅退出
 }
 
 void setupSignalHandlers(void) {
@@ -5841,8 +5843,8 @@ void setupSignalHandlers(void) {
     sigemptyset(&act.sa_mask);
     act.sa_flags = 0;
     act.sa_handler = sigShutdownHandler;
-    sigaction(SIGTERM, &act, NULL);
-    sigaction(SIGINT, &act, NULL);
+    sigaction(SIGTERM, &act, NULL); // kill -15 <pid> 或 kill <pid>
+    sigaction(SIGINT, &act, NULL); // kill -2 <pid> 或 Ctrl+C
 
     sigemptyset(&act.sa_mask);
     act.sa_flags = SA_NODEFER | SA_RESETHAND | SA_SIGINFO;

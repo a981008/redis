@@ -124,8 +124,8 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
             if (e->events & EPOLLOUT) mask |= AE_WRITABLE;
             if (e->events & EPOLLERR) mask |= AE_WRITABLE|AE_READABLE;
             if (e->events & EPOLLHUP) mask |= AE_WRITABLE|AE_READABLE;
-            eventLoop->fired[j].fd = e->data.fd;
-            eventLoop->fired[j].mask = mask;
+            eventLoop->fired[j].fd = e->data.fd; // 收集触发网络事件的 fd
+            eventLoop->fired[j].mask = mask; // 收集触发网络事件的类型（可读/可写/可读写）
         }
     }
     return numevents;
