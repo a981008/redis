@@ -1158,13 +1158,13 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip) {
     /* Last chance to keep flags */
     c->flags |= flags;
 
-    /* Initiate accept.
+    /* 发起 accept。
      *
-     * Note that connAccept() is free to do two things here:
-     * 1. Call clientAcceptHandler() immediately;
-     * 2. Schedule a future call to clientAcceptHandler().
+     * 注意 connAccept() 在这里可以做两件事：
+     * 1. 立即调用 clientAcceptHandler()；
+     * 2. 安排在未来某个时刻调用 clientAcceptHandler()。
      *
-     * Because of that, we must do nothing else afterwards.
+     * 因此，在此之后我们不能再做任何其他操作。
      */
     if (connAccept(conn, clientAcceptHandler) == C_ERR) {
         char conninfo[100];

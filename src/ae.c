@@ -46,8 +46,12 @@
 #include "zmalloc.h"
 #include "config.h"
 
-/* Include the best multiplexing layer supported by this system.
- * The following should be ordered by performances, descending. */
+/* Redis 在编译时会根据操作系统支持的能力，选择最优的 I/O 多路复用机制来实现 aeApiPoll：
+ * 1. Linux 上优先用 epoll
+ * 2. BSD 系统（macOS、FreeBSD 等）优先用 kqueue
+ * 3. 其次是 evport（Solaris 特有）
+ * 4. 最后退化到 select
+ */
 #ifdef HAVE_EVPORT
 #include "ae_evport.c"
 #else
@@ -410,17 +414,17 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
             int fd = eventLoop->fired[j].fd;
             int fired = 0; /* 当前文件描述符已经触发的事件数量。 */
 
-            /* Normally we execute the readable event first, and the writable
-             * event later. This is useful as sometimes we may be able
-             * to serve the reply of a query immediately after processing the
-             * query.
+            /* 通常情况下，我们会先执行可读事件，然后再执行可写事件。
+             * 这样做是有意义的，因为在处理完查询请求之后，
+             * 我们有时可以立刻将查询结果返回给客户端。
              *
-             * However if AE_BARRIER is set in the mask, our application is
-             * asking us to do the reverse: never fire the writable event
-             * after the readable. In such a case, we invert the calls.
-             * This is useful when, for instance, we want to do things
-             * in the beforeSleep() hook, like fsyncing a file to disk,
-             * before replying to a client. */
+             * 但是，如果 mask 中设置了 AE_BARRIER 标志，
+             * 那么应用程序要求我们反过来执行：绝不在可读事件之后触发可写事件。
+             * 在这种情况下，我们会倒置调用顺序。
+             * 这样做在某些场景下很有用，比如我们希望在 beforeSleep() 钩子里
+             * 先执行一些操作（例如将文件 fsync 到磁盘），
+             * 然后再回复客户端。
+             */
             int invert = fe->mask & AE_BARRIER;
 
             /* Note the "fe->mask & mask & ..." code: maybe an already

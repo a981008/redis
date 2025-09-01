@@ -2342,20 +2342,18 @@ void whileBlockedCron() {
 
 extern int ProcessingEventsWhileBlocked;
 
-/* This function gets called every time Redis is entering the
- * main loop of the event driven library, that is, before to sleep
- * for ready file descriptors.
+/* 每次 Redis 进入事件驱动库的主循环时，都会调用这个函数，
+ * 也就是说，在准备进入“等待文件描述符就绪”之前调用。
  *
- * Note: This function is (currently) called from two functions:
- * 1. aeMain - The main server loop
- * 2. processEventsWhileBlocked - Process clients during RDB/AOF load
+ * 注意：这个函数（当前）会在两个地方被调用：
+ * 1. aeMain - Redis 的主循环
+ * 2. processEventsWhileBlocked - 在加载 RDB/AOF 期间处理客户端
  *
- * If it was called from processEventsWhileBlocked we don't want
- * to perform all actions (For example, we don't want to expire
- * keys), but we do need to perform some actions.
+ * 如果是从 processEventsWhileBlocked 调用的，我们不希望执行
+ * 所有操作（比如不希望去过期 key），但仍然需要执行一些操作。
  *
- * The most important is freeClientsInAsyncFreeQueue but we also
- * call some other low-risk functions. */
+ * 最重要的是执行 freeClientsInAsyncFreeQueue，
+ * 但我们也会调用一些其他低风险的函数。 */
 void beforeSleep(struct aeEventLoop *eventLoop) {
     UNUSED(eventLoop);
 
@@ -3324,8 +3322,7 @@ void initServer(void) {
         exit(1);
     }
 
-    /* Create an event handler for accepting new connections in TCP and Unix
-     * domain sockets. */
+    /* 为接受 TCP 和 Unix 域套接字上的新连接创建一个事件处理器。*/
     if (createSocketAcceptHandler(&server.ipfd, acceptTcpHandler) != C_OK) {
         serverPanic("Unrecoverable error creating TCP socket accept handler.");
     }
@@ -3345,8 +3342,8 @@ void initServer(void) {
                 "blocked clients subsystem.");
     }
 
-    /* Register before and after sleep handlers (note this needs to be done
-     * before loading persistence since it is used by processEventsWhileBlocked. */
+    /* 在休眠前和休眠后注册处理器（注意：这一步需要在加载持久化数据之前完成，
+     * 因为它会被 processEventsWhileBlocked 使用。 */
     aeSetBeforeSleepProc(server.el,beforeSleep);
     aeSetAfterSleepProc(server.el,afterSleep);
 
