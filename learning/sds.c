@@ -27,8 +27,8 @@ sds sdsnewlen(const void *init, size_t initlen)
         else
             memset(sh->buf, 0, initlen);
     }
-    sh->buf[initlen] = '\0';
-    return (char *)sh->buf;
+    sh->buf[initlen] = '\0'; // 保证为合法 c 字符串
+    return (char *)sh->buf; // 隐藏头部，对调用者而言就是一个普通的 c 字符串
 }
 
 sds sdsnew(const char *init)
@@ -39,8 +39,7 @@ sds sdsnew(const char *init)
 
 struct sdshdr *sds_hdr(sds s)
 {
-    // s 地址减去头部大小即可得到头部开始的地址
-    // s 是 buf 的地址
+    // 通过偏移量的方式获取头部地址
     return (struct sdshdr *)(s - sizeof(struct sdshdr));
 }
 
