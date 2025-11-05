@@ -338,24 +338,19 @@ ssize_t aofWrite(int fd, const char *buf, size_t len) {
     return totwritten;
 }
 
-/* Write the append only file buffer on disk.
+/* 将 AOF 缓冲区写入磁盘。
  *
- * Since we are required to write the AOF before replying to the client,
- * and the only way the client socket can get a write is entering when the
- * the event loop, we accumulate all the AOF writes in a memory
- * buffer and write it on disk using this function just before entering
- * the event loop again.
+ * 因为 Redis 要求在回复客户端之前写入 AOF，
+ * 而客户端 socket 只能在事件循环中写数据，
+ * 所以 Redis 会把所有 AOF 写操作先累积在内存缓冲区里，
+ * 然后在进入事件循环前调用此函数写入磁盘。
  *
- * About the 'force' argument:
- *
- * When the fsync policy is set to 'everysec' we may delay the flush if there
- * is still an fsync() going on in the background thread, since for instance
- * on Linux write(2) will be blocked by the background fsync anyway.
- * When this happens we remember that there is some aof buffer to be
- * flushed ASAP, and will try to do that in the serverCron() function.
- *
- * However if force is set to 1 we'll write regardless of the background
- * fsync. */
+ * force 参数说明：
+ * 如果 AOF 的 fsync 策略为 everysec，而后台 fsync 仍在进行中，写入可以被延迟（Linux 下 write() 会被后台 fsync 阻塞）。
+ * 当延迟发生时，Redis 会记录有缓冲区数据需要尽快刷盘，并在 serverCron() 中尝试完成。
+ * 
+ * 如果 force=1，则无论后台 fsync 是否进行中，都直接写入。
+ */
 #define AOF_WRITE_LOG_ERROR_RATE 30 /* Seconds between errors logging. */
 void flushAppendOnlyFile(int force) {
     ssize_t nwritten;
@@ -612,8 +607,7 @@ sds catAppendOnlyExpireAtCommand(sds buf, struct redisCommand *cmd, robj *key, r
 
 void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int argc) {
     sds buf = sdsempty();
-    /* The DB this command was targeting is not the same as the last command
-     * we appended. To issue a SELECT command is needed. */
+    /* 如果当前命令操作的数据库 dictid 与上一次写入的数据库不同，需要写一条 SELECT <db> 命令 */
     if (dictid != server.aof_selected_db) {
         char seldb[64];
 
@@ -625,9 +619,11 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
 
     if (cmd->proc == expireCommand || cmd->proc == pexpireCommand ||
         cmd->proc == expireatCommand) {
-        /* Translate EXPIRE/PEXPIRE/EXPIREAT into PEXPIREAT */
+        // 内部统一将所有过期命令转化为 PEXPIREAT（绝对毫秒时间戳）
         buf = catAppendOnlyExpireAtCommand(buf,cmd,argv[1],argv[2]);
     } else if (cmd->proc == setCommand && argc > 3) {
+        // 将 SET key value EX seconds|PX milliseconds 转化为 SET key value PXAT <abs_milliseconds>
+       
         robj *pxarg = NULL;
         /* When SET is used with EX/PX argument setGenericCommand propagates them with PX millisecond argument.
          * So since the command arguments are re-written there, we can rely here on the index of PX being 3. */
@@ -656,22 +652,19 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
             buf = catAppendOnlyGenericCommand(buf,argc,argv);
         }
     } else {
-        /* All the other commands don't need translation or need the
-         * same translation already operated in the command vector
-         * for the replication itself. */
+        // 除了特殊命令，其他命令直接用 catAppendOnlyGenericCommand() 序列化成 RESP 格式
         buf = catAppendOnlyGenericCommand(buf,argc,argv);
     }
 
-    /* Append to the AOF buffer. This will be flushed on disk just before
-     * of re-entering the event loop, so before the client will get a
-     * positive reply about the operation performed. */
+    // 将内容追加到 AOF 缓冲区中。
+    // 此内容会在重新进入事件循环之前（即在客户端接收到关于所执行操作的肯定回复之前）被写入磁盘。
+    // 这里只追加到内存，真正写文件由 flushAppendOnlyFile() 触发（事件循环或后台线程）
     if (server.aof_state == AOF_ON)
         server.aof_buf = sdscatlen(server.aof_buf,buf,sdslen(buf));
 
-    /* If a background append only file rewriting is in progress we want to
-     * accumulate the differences between the child DB and the current one
-     * in a buffer, so that when the child process will do its work we
-     * can append the differences to the new append only file. */
+
+    // 如果后台正在重写 AOF 文件，先写入增量缓冲 aof_rewrite_buf_blocks
+    // 重写子进程完成后再把增量补上，保证重写 AOF 文件期间数据不丢
     if (server.child_type == CHILD_TYPE_AOF)
         aofRewriteBufferAppend((unsigned char*)buf,sdslen(buf));
 

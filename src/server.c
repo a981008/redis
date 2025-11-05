@@ -2199,15 +2199,15 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     updateDictResizePolicy();
 
 
-    /* AOF postponed flush: Try at every cron cycle if the slow fsync
-     * completed. */
+    /* fsync 慢导致的积压
+     * AOF 延迟刷新：如果慢速的 fsync 已完成，则在每个 cron 周期内再次尝试刷新操作。*/
     if (server.aof_state == AOF_ON && server.aof_flush_postponed_start)
         flushAppendOnlyFile(0);
 
-    /* AOF write errors: in this case we have a buffer to flush as well and
-     * clear the AOF error in case of success to make the DB writable again,
-     * however to try every second is enough in case of 'hz' is set to
-     * a higher frequency. */
+
+    /* AOF 写入错误：在这种情况下，我们还需要清理一个缓冲区并刷新它，
+     * 同时清除 AOF 错误（以确保数据库能够再次被写入），
+     * 但在“hz”设置为较高频率的情况下，每隔一秒钟尝试一次就足够了。*/
     run_with_period(1000) {
         if (server.aof_state == AOF_ON && server.aof_last_write_status == C_ERR)
             flushAppendOnlyFile(0);
@@ -2446,6 +2446,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     trackingBroadcastInvalidationMessages();
 
     /* Write the AOF buffer on disk */
+    // 正常写命令后刷盘
     if (server.aof_state == AOF_ON)
         flushAppendOnlyFile(0);
 
@@ -3568,42 +3569,46 @@ struct redisCommand *lookupCommandOrOriginal(sds name) {
     return cmd;
 }
 
-/* Propagate the specified command (in the context of the specified database id)
- * to AOF and Slaves.
+/* processCommand -> call -> propagate 
+ * 将指定命令（在指定数据库 ID 的上下文中）传播到 AOF 文件和从节点。
  *
- * flags are an xor between:
- * + PROPAGATE_NONE (no propagation of command at all)
- * + PROPAGATE_AOF (propagate into the AOF file if is enabled)
- * + PROPAGATE_REPL (propagate into the replication link)
+ * flags 是以下标志的按位或组合：
+ * + PROPAGATE_NONE：不传播该命令；
+ * + PROPAGATE_AOF：若开启 AOF，则将命令写入 AOF；
+ * + PROPAGATE_REPL：将命令传播给复制从节点。
  *
- * This should not be used inside commands implementation since it will not
- * wrap the resulting commands in MULTI/EXEC. Use instead alsoPropagate(),
- * preventCommandPropagation(), forceCommandPropagation().
+ * 注意：该函数不应在命令实现内部直接使用，因为它不会自动用 MULTI/EXEC
+ * 包裹传播的命令。命令内部应使用 alsoPropagate()、preventCommandPropagation()
+ * 或 forceCommandPropagation()。
  *
- * However for functions that need to (also) propagate out of the context of a
- * command execution, for example when serving a blocked client, you
- * want to use propagate().
+ * 然而，对于需要在命令执行上下文之外也传播命令的情况（例如处理阻塞客户端时），
+ * 应该使用 propagate()。
  */
 void propagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
                int flags)
 {
+    // 如果当前 Redis 被配置为禁止复制（例如某些特殊的后台任务模式），直接返回，不传播命令。
     if (!server.replication_allowed)
         return;
 
-    /* Propagate a MULTI request once we encounter the first command which
-     * is a write command.
-     * This way we'll deliver the MULTI/..../EXEC block as a whole and
-     * both the AOF and the replication link will have the same consistency
-     * and atomicity guarantees. */
+    /* 若当前正在执行事务（MULTI/EXEC）
+     * 且还没开始在事务中传播命令
+     * 那么先发送一条 MULTI 命令
+     * 所有事务中的命令都会被一起包裹在 MULTI ... EXEC 中写入 AOF 文件和复制给从节点。
+     * 保证一致性与原子性。 */
     if (server.in_exec && !server.propagate_in_transaction)
         execCommandPropagateMulti(dbid);
 
-    /* This needs to be unreachable since the dataset should be fixed during 
-     * client pause, otherwise data may be lossed during a failover. */
+    /* 确保在客户端暂停（client pause）期间不修改数据
+     * 如果 Redis 暂停请求但此时仍修改了数据，会导致主从不一致或故障转移期间数据丢失 
+     * 主从切换、阻塞复制、RDB/AOF 重写等操作期间，会暂停客户端请求。
+     */
     serverAssert(!(areClientsPaused() && !server.client_pause_in_transaction));
 
+    // AOF 功能开启，且开启 PROPAGATE_AOF 标志，则将命令写入 AOF 文件。
     if (server.aof_state != AOF_OFF && flags & PROPAGATE_AOF)
         feedAppendOnlyFile(cmd,dbid,argv,argc);
+    // 开启 PROPAGATE_REPL 标志，则将命令传播给所有从节点。
     if (flags & PROPAGATE_REPL)
         replicationFeedSlaves(server.slaves,dbid,argv,argc);
 }
